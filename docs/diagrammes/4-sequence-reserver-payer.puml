@@ -1,0 +1,122 @@
+@startuml 4-sequence-reserver-payer
+autonumber
+skinparam defaultFontName Arial
+skinparam sequenceMessageAlign center
+skinparam roundCorner 8
+
+title Comment des places sont-elles réservées puis payées… ou libérées ?
+
+actor "Client" as Client
+participant "ReservationController\n[Adapter In]" as Controller
+participant "ReserverDesPlacesService\n[Application]" as ServiceReserver
+participant "Seances\n[Port Out]" as PortSeances
+participant "Seance\n[Agrégat]" as Seance
+participant "Commande\n[Agrégat]" as Commande
+participant "Commandes\n[Port Out]" as PortCommandes
+participant "Paiements\n[Port Out]" as PortPaiements
+participant "PayVia\n[PSP Externe]" as PayVia
+participant "WebhookPayViaController\n[Adapter In]" as WebhookController
+participant "ConfirmerPaiementService\n[Application]" as ServiceConfirmer
+participant "ExpirationPlanifiee\n[Adapter In]" as Scheduler
+participant "ExpirerBlocagesService\n[Application]" as ServiceExpirer
+participant "PublicateurEvenements\n[Port Out]" as PortEvents
+
+== Phase 1 : Réservation des places ==
+
+Client -> Controller : POST /seances/S42/reservations\n{"billets": [{"place":"G7", "categorie":"PLEIN"}, {"place":"G8", "categorie":"REDUIT"}]}
+activate Controller
+Controller -> ServiceReserver : executer(DemandeReservation)
+activate ServiceReserver
+
+ServiceReserver -> PortSeances : parId(S42)
+PortSeances --> ServiceReserver : seance
+
+ServiceReserver -> Seance : bloquer({G7, G8}, commandeId, maintenant)
+activate Seance
+note over Seance : Vérifie B4 (vente ouverte)\nVérifie B1 (places libres)\nPrincipe Tout-ou-Rien
+Seance --> ServiceReserver : expireA (maintenant + 10 min [B2])
+deactivate Seance
+
+ServiceReserver -> Commande : creer(id, S42, billets, expireA)
+activate Commande
+note over Commande : Invariants : B3 (max 10 places),\npas de doublons, prix figé (B6)
+Commande --> ServiceReserver : commande [EN_ATTENTE_PAIEMENT]
+deactivate Commande
+
+ServiceReserver -> PortSeances : enregistrer(seance)
+ServiceReserver -> PortCommandes : enregistrer(commande)
+ServiceReserver -> PortPaiements : demanderPaiement(id, commande.total())
+PortPaiements --> ServiceReserver : urlPaiement ("https://payvia.fr/...")
+
+ServiceReserver --> Controller : Reservation(id, total, urlPaiement, expireA)
+deactivate ServiceReserver
+Controller --> Client : 201 CREATED (ReservationReponse)
+deactivate Controller
+
+== Phase 2 : Deux issues possibles (Alternative) ==
+
+alt Cas nominal : Le client paie dans les 10 minutes (B2, B13)
+
+    Client -> PayVia : Paie sur la page PayVia
+    PayVia -> WebhookController : POST /webhooks/payvia\n{"event": "payment.succeeded", "reference": "C-1"}
+    activate WebhookController
+    WebhookController -> ServiceConfirmer : executer(commandeId)
+    activate ServiceConfirmer
+
+    ServiceConfirmer -> PortCommandes : parId(C-1)
+    PortCommandes --> ServiceConfirmer : commande
+    ServiceConfirmer -> PortSeances : parId(commande.seance())
+    PortSeances --> ServiceConfirmer : seance
+
+    ServiceConfirmer -> Seance : vendre(C-1, commande.places(), maintenant)
+    activate Seance
+    note over Seance : Places marquées VENDUE\n(B1 verrouillé)
+    deactivate Seance
+
+    ServiceConfirmer -> Commande : payer(maintenant)
+    activate Commande
+    note over Commande : Statut -> PAYEE\nEnregistre CommandePayee
+    deactivate Commande
+
+    ServiceConfirmer -> PortSeances : enregistrer(seance)
+    ServiceConfirmer -> PortCommandes : enregistrer(commande)
+
+    ServiceConfirmer -> PortEvents : publier(CommandePayee)
+    ServiceConfirmer --> WebhookController : ok
+    deactivate ServiceConfirmer
+    WebhookController --> PayVia : 204 NO_CONTENT
+    deactivate WebhookController
+
+else Cas d'expiration : Aucun paiement au bout de 10 minutes (B2)
+
+    Scheduler -> ServiceExpirer : executer() [Chaque minute]
+    activate ServiceExpirer
+
+    ServiceExpirer -> PortSeances : enVente()
+    PortSeances --> ServiceExpirer : [seances]
+
+    loop Pour chaque séance
+        ServiceExpirer -> Seance : libererBlocagesExpires(maintenant)
+        activate Seance
+        note over Seance : Remet à LIBRE les places\ndont le délai de 10 min est dépassé
+        Seance --> ServiceExpirer : commandesConcernees [C-1]
+        deactivate Seance
+        ServiceExpirer -> PortSeances : enregistrer(seance)
+    end
+
+    loop Pour chaque commande concernée
+        ServiceExpirer -> PortCommandes : parId(C-1)
+        PortCommandes --> ServiceExpirer : commande
+        ServiceExpirer -> Commande : expirer(maintenant)
+        activate Commande
+        note over Commande : Statut -> EXPIREE\nEnregistre CommandeExpiree
+        deactivate Commande
+        ServiceExpirer -> PortCommandes : enregistrer(commande)
+        ServiceExpirer -> PortEvents : publier(CommandeExpiree)
+    end
+
+    deactivate ServiceExpirer
+
+end
+
+@enduml

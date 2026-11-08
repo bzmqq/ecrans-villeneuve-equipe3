@@ -1,0 +1,144 @@
+@startuml 5-modele-vente
+skinparam classAttributeIconSize 0
+skinparam defaultFontName Arial
+skinparam roundCorner 8
+
+title Quels agrégats protègent les règles de la vente ? (Modèle du Domaine)
+
+package "Agrégat Seance (Plan de salle)" #FADBD8 {
+    class Seance <<Aggregate Root>> {
+        - id: SeanceId
+        - debut: LocalDateTime
+        - places: Map<PlaceId, EtatPlace>
+        - version: long
+        --
+        + {static} ouverte(id, debut, plan): Seance
+        + bloquer(demandees, cmd, date): LocalDateTime
+        + vendre(cmd, places, date): void
+        + libererBlocagesExpires(date): Set<CommandeId>
+        + venteOuverteA(date): boolean
+        + etat(place): EtatPlace
+    }
+
+    class EtatPlace <<Value Object>> {
+        - statut: StatutPlace
+        - commande: CommandeId
+        - bloqueeJusqua: LocalDateTime
+        --
+        + {static} libre(): EtatPlace
+        + {static} bloquee(cmd, jusqua): EtatPlace
+        + {static} vendue(cmd): EtatPlace
+        + estLibreA(date): boolean
+        + blocageExpireA(date): boolean
+        + estBloqueePar(cmd): boolean
+    }
+
+    enum StatutPlace <<Enumeration>> {
+        LIBRE
+        BLOQUEE
+        VENDUE
+    }
+}
+
+package "Agrégat Commande (Achat client)" #FCF3CF {
+    class Commande <<Aggregate Root>> {
+        - id: CommandeId
+        - seance: SeanceId
+        - billets: List<Billet>
+        - expireA: LocalDateTime
+        - statut: StatutCommande
+        - evenements: List<EvenementVente>
+        --
+        + {static} creer(id, seance, billets, expireA): Commande
+        + total(): Montant
+        + payer(date): void
+        + expirer(date): void
+        + retirerEvenements(): List<EvenementVente>
+        + places(): Set<PlaceId>
+    }
+
+    class Billet <<Value Object>> {
+        - place: PlaceId
+        - tarif: Tarif
+    }
+
+    class Tarif <<Value Object>> {
+        - categorie: Categorie
+        - prix: Montant
+    }
+
+    enum StatutCommande <<Enumeration>> {
+        EN_ATTENTE_PAIEMENT
+        PAYEE
+        EXPIREE
+    }
+
+    enum Categorie <<Enumeration>> {
+        PLEIN
+        REDUIT
+        ENFANT
+        MATIN
+        ABONNE
+    }
+}
+
+package "Identifiants & Valeurs partagés" #E8F8F5 {
+    class PlaceId <<Value Object>> {
+        - rang: char
+        - numero: int
+    }
+
+    class SeanceId <<Value Object>> {
+        - valeur: String
+    }
+
+    class CommandeId <<Value Object>> {
+        - valeur: String
+    }
+
+    class Montant <<Value Object>> {
+        - centimes: long
+        + plus(autre): Montant
+    }
+}
+
+package "Événements de Domaine" #EBF5FB {
+    interface EvenementVente <<sealed>>
+    class CommandePayee <<record>> implements EvenementVente
+    class CommandeExpiree <<record>> implements EvenementVente
+    class VentePartenaireEnregistree <<record>> implements EvenementVente
+}
+
+' Relations
+Seance "1" *-- "0..*" EtatPlace : compose
+EtatPlace --> StatutPlace
+Seance --> SeanceId
+Seance ..> PlaceId
+
+Commande "1" *-- "1..10" Billet : contient (B3)
+Billet --> PlaceId
+Billet --> Tarif
+Tarif --> Categorie
+Tarif --> Montant
+Commande --> StatutCommande
+Commande --> CommandeId
+Commande --> SeanceId : référence par ID (Règle 3 Vernon)
+Commande ..> EvenementVente : enregistre
+
+note bottom of Seance
+  <b>Invariants protégés :</b>
+  - B1 : Une place, une seule vente
+  - B2 : Blocage 10 min & libération
+  - B4 : Vente fermée à H+15
+  - Tout-ou-rien sur les réservations
+end note
+
+note bottom of Commande
+  <b>Invariants protégés :</b>
+  - B3 : 10 places max par commande
+  - B6 : Prix figé au moment du choix
+  - Non-duplication de places dans le panier
+  - Transitions d'état strictes
+end note
+
+@enduml

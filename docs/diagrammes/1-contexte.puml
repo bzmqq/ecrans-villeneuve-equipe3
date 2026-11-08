@@ -1,0 +1,43 @@
+@startuml 1-contexte
+skinparam componentStyle uml2
+skinparam defaultFontName Arial
+skinparam roundCorner 8
+skinparam packageStyle rectangle
+
+title Avec qui la billetterie échange-t-elle ? (Diagramme de Contexte)
+
+actor "Spectateur\n(En ligne)" as ClientWeb
+actor "Client dans le hall\n(Bornes)" as ClientBorne
+actor "Caissier\n(Guichets)" as Caissier
+actor "Agent d'accueil\n(Douchettes)" as Agent
+actor "Programmateur\n(Julien)" as Prog
+actor "Responsable Financier\n(Marc)" as Fin
+
+package "Système : Billetterie Les Écrans de Villeneuve" #FEFDF9 {
+    component "Cœur de Billetterie\n& Vente de Places" as CoreSys #FDEDEC
+}
+
+package "Systèmes Externes" #E8F4F8 {
+    component "PayVia\n(PSP - Paiement & Remboursement)" as PayVia
+    component "SortiesFlash / CinéMalin\n(Partenaires de billetterie)" as Partenaires
+    component "FilmoData\n(Base films externe)" as FilmoData
+    component "Portail CNC\n(Déclaration réglementaire)" as CNC
+    component "Service Envoi\n(Emails & SMS - Billets QR)" as NotifService
+}
+
+' Flux utilisateurs
+ClientWeb --> CoreSys : Réservation de places, paiement, annulation (Web / App)
+ClientBorne --> CoreSys : Achat de billets en libre-service
+Caissier --> CoreSys : Vente sur place, encaissement (espèces / CB)
+Agent --> CoreSys : Contrôle et scan des billets
+Prog --> CoreSys : Publication de la programmation des séances
+Fin --> CoreSys : Export des ventes hebdomadaires pour déclaration
+
+' Flux systèmes externes
+CoreSys <--> PayVia : Demande de paiement & Webhooks (payment.succeeded)
+Partenaires --> CoreSys : Ventes fermes déjà payées (format partenaire)
+FilmoData --> CoreSys : Fiches des films (titres, durées en secondes)
+CoreSys --> CNC : Fichier hebdomadaire d'entrées (mercredi au mardi)
+CoreSys --> NotifService : Envoi des billets dématérialisés avec QR code
+
+@enduml

@@ -1,0 +1,113 @@
+@startuml 3-composants-vente
+skinparam componentStyle uml2
+skinparam packageBackgroundColor #FAFAFA
+skinparam packageBorderColor #666666
+skinparam defaultFontName Arial
+skinparam defaultFontSize 12
+
+title Comment la vente de places est-elle branchée sur le monde extérieur ?
+
+package "Systèmes Externes & Acteurs" #E8F4F8 {
+    actor "Client / Caissier\n(Site, App, Bornes, Guichet)" as Client
+    component "PayVia\n(PSP Externe)" as PayVia
+    component "SortiesFlash\n(Partenaire Externe)" as SortiesFlash
+    component "Système de Planification\n(OS / Spring Timer)" as Scheduler
+}
+
+package "Hexagone : Vente de Places (Core Domain)" #FEFDF9 {
+
+    package "Adapters Primaires (In)" #E8F8F5 {
+        component "ReservationController\n(@RestController)" as ReservationController
+        component "WebhookPayViaController\n(@RestController)" as WebhookPayViaController
+        component "SortiesFlashController\n(@RestController)" as SortiesFlashController
+        component "AclSortiesFlash\n(Anti-Corruption Layer)" as AclSortiesFlash
+        component "ExpirationPlanifiee\n(@Scheduled)" as ExpirationPlanifiee
+    }
+
+    package "Application (Ports In & Services)" #FFF8E7 {
+        interface "ReserverDesPlaces\n(Port In)" as PortReserver
+        interface "ConfirmerPaiement\n(Port In)" as PortConfirmer
+        interface "ExpirerBlocages\n(Port In)" as PortExpirer
+        interface "EnregistrerVentePartenaire\n(Port In)" as PortPartenaire
+
+        component "ReserverDesPlacesService" as ReserverDesPlacesService
+        component "ConfirmerPaiementService" as ConfirmerPaiementService
+        component "ExpirerBlocagesService" as ExpirerBlocagesService
+        component "EnregistrerVentePartenaireService" as EnregistrerVentePartenaireService
+        component "WebhookPayVia\n(ACL Webhook)" as WebhookPayViaACL
+    }
+
+    package "Domaine (Agrégats & Valeurs)" #FDEDEC {
+        component "Agrégat Seance\n[Root]" as AgregatSeance #FADBD8
+        component "Agrégat Commande\n[Root]" as AgregatCommande #FADBD8
+        note right of AgregatSeance : Protège B1 (non-surbooking)\net B2 (blocage 10 min)
+        note right of AgregatCommande : Protège B3 (max 10 places)\net B6 (prix figé)
+    }
+
+    package "Application (Ports Out)" #FFF8E7 {
+        interface "Seances\n(Port Out)" as PortSeances
+        interface "Commandes\n(Port Out)" as PortCommandes
+        interface "GrilleTarifaire\n(Port Out)" as PortGrille
+        interface "Paiements\n(Port Out)" as PortPaiements
+        interface "PublicateurEvenements\n(Port Out)" as PortEvents
+    }
+
+    package "Adapters Secondaires (Out)" #EBF5FB {
+        component "SeancesEnMemoire / SeancesJpa" as AdapterSeances
+        component "CommandesEnMemoire" as AdapterCommandes
+        component "GrilleTarifaireFixe" as AdapterGrille
+        component "PaiementSimule / ClientPayVia" as AdapterPaiements
+        component "JournalEvenements" as AdapterEvents
+    }
+}
+
+' Liaisons externes vers Adapters In
+Client --> ReservationController : HTTP POST /seances/{id}/reservations
+PayVia --> WebhookPayViaController : HTTP POST /webhooks/payvia
+SortiesFlash --> SortiesFlashController : HTTP POST /partner/v2/orders
+SortiesFlashController --> AclSortiesFlash : Traduire format partenaire
+Scheduler --> ExpirationPlanifiee : Déclenchement chaque minute
+
+' Adapters In vers Ports In
+ReservationController ..> PortReserver : utilise
+WebhookPayViaController ..> WebhookPayViaACL : utilise
+WebhookPayViaACL ..> PortConfirmer : appelle
+SortiesFlashController ..> PortPartenaire : appelle
+ExpirationPlanifiee ..> PortExpirer : appelle
+
+' Implémentation Ports In
+PortReserver <|.. ReserverDesPlacesService
+PortConfirmer <|.. ConfirmerPaiementService
+PortExpirer <|.. ExpirerBlocagesService
+PortPartenaire <|.. EnregistrerVentePartenaireService
+
+' Services vers Domaine
+ReserverDesPlacesService --> AgregatSeance : bloquer(...)
+ReserverDesPlacesService --> AgregatCommande : creer(...)
+ConfirmerPaiementService --> AgregatSeance : vendre(...)
+ConfirmerPaiementService --> AgregatCommande : payer(...)
+ExpirerBlocagesService --> AgregatSeance : libererBlocagesExpires(...)
+ExpirerBlocagesService --> AgregatCommande : expirer(...)
+
+' Services vers Ports Out
+ReserverDesPlacesService ..> PortSeances
+ReserverDesPlacesService ..> PortCommandes
+ReserverDesPlacesService ..> PortGrille
+ReserverDesPlacesService ..> PortPaiements
+
+ConfirmerPaiementService ..> PortSeances
+ConfirmerPaiementService ..> PortCommandes
+ConfirmerPaiementService ..> PortEvents
+
+ExpirerBlocagesService ..> PortSeances
+ExpirerBlocagesService ..> PortCommandes
+ExpirerBlocagesService ..> PortEvents
+
+' Ports Out implémentés par Adapters Out
+PortSeances <|.. AdapterSeances
+PortCommandes <|.. AdapterCommandes
+PortGrille <|.. AdapterGrille
+PortPaiements <|.. AdapterPaiements
+PortEvents <|.. AdapterEvents
+
+@enduml

@@ -1,0 +1,61 @@
+@startuml 2-context-map
+skinparam packageStyle rectangle
+skinparam defaultFontName Arial
+skinparam roundCorner 8
+
+title Comment les contextes collaborent-ils ? (Context Map)
+
+package "Systèmes Externes" #E8F4F8 {
+    [PayVia\n(PSP Externe)] as PayVia
+    [SortiesFlash / CinéMalin\n(Partenaires Vente)] as Partenaires
+    [FilmoData\n(Base films externe)] as FilmoData
+    [Portail CNC\n(Déclaration légale)] as CNC
+}
+
+package "Billetterie Écrans de Villeneuve" #FDFEFE {
+
+    package "Vente de Places\n[CORE DOMAIN]" #FDEDEC {
+        [Vente\n(Agrégats Seance, Commande)] as Vente
+    }
+
+    package "Programmation\n[SUPPORTING DOMAIN]" #EBF5FB {
+        [Programmation\n(Films, Salles, Horaires)] as Programmation
+    }
+
+    package "Tarification\n[SUPPORTING DOMAIN]" #E8F8F5 {
+        [Tarification\n(Grille, Opérations, Suppléments)] as Tarification
+    }
+
+    package "Abonnements\n[SUPPORTING DOMAIN]" #FEF9E7 {
+        [Abonnements\n(Souscriptions, Quotas, No-shows)] as Abonnements
+    }
+
+    package "Contrôle d'Accès\n[GENERIC DOMAIN]" #F4ECF7 {
+        [Contrôle d'Accès\n(Douchettes, Scan hors-ligne)] as Controle
+    }
+
+    package "Déclaration CNC\n[GENERIC DOMAIN]" #EAEDED {
+        [Déclaration Hebdo CNC\n(Fichier légal imposé)] as DeclCNC
+    }
+}
+
+' Relations amont / aval (U/D) et patterns DDD
+FilmoData -[#blue]-> Programmation : [U] FilmoData\n[D] Programmation\n(Conformist)
+
+Programmation -[#green]-> Vente : [U] Programmation\n[D] Vente\n(Customer / Supplier)\nSéances publiées
+
+Tarification -[#green]-> Vente : [U] Tarification\n[D] Vente\n(Customer / Supplier)\nPrix calculé à la réservation
+
+Partenaires -[#red]-> Vente : [U] SortiesFlash\n[D] Vente\n**Anti-Corruption Layer (ACL)**\nFormat imposé
+
+PayVia -[#red]-> Vente : [U] PayVia\n[D] Vente\n**Anti-Corruption Layer (ACL)**\nWebhook HTTP
+
+Vente -[#orange]-> Controle : [U] Vente\n[D] Contrôle d'accès\n(Published Language / Events)\nBillet valide / payé
+
+Vente -[#orange]-> DeclCNC : [U] Vente\n[D] Déclaration CNC\n(Published Language / Events)\nVentes réelles hebdomadaires
+
+Abonnements -[#purple]-> Vente : [U] Abonnements\n[D] Vente\nQuotas & Place 0 € (B7)
+
+Controle -[#purple]-> Abonnements : [U] Contrôle\n[D] Abonnements\nScan effectué / No-show (B8)
+
+@enduml
